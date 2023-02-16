@@ -3,12 +3,12 @@ This repository provides code for the replication of the data for "Wildlands fac
 
 ## Custom modules
 In the folder modules, you can find the various modules associated with the different operations performed : 
-- params.py
-- utilities.py
-- dynamic_programming.py
-- matcher.py
-- successions.py
-- outputs.py
+- `params.py` : contains key parameters to set up, including budget, landscape size and paths for data storage
+- `utilities.py`
+- `dynamic_programming.py`
+- `matcher.py`
+- `successions.py`
+- `outputs.py`
 
 The only file you need to tweak for replication is params.py, in order to set the correct paths as well as the size of the landscapes and the budget constraints
 
