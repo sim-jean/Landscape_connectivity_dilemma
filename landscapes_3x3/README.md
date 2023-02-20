@@ -3,7 +3,7 @@
 For replication on your local machine : 
 - Download the `modules` folder and make sure you have an `__init__.py` file.
 - Download files 1 to 6 here
-- Specify `size=3` and `budget` in the `params.py` file
+- Specify the paths for data storage, `size=3` and `budget` in the `params.py` file
 
 Then :
 - *Step 1:* Run file `1_Landscapes.py` to generate all the unique landscapes and the folder structure for the storage of intermediary results
