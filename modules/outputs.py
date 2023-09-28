@@ -1597,6 +1597,7 @@ def convergence(successions):
         return convergence_time, cycle
 #successions = [str(shape)]*10
 
+
 def data_fix(data_path):
     """
     Small function to fix some stats that were wrong before
