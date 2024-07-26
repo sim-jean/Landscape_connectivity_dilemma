@@ -194,7 +194,7 @@ def succession_dataframe3(data_path, biodiv_index, time_param='Yes', follow_up="
 
     rows_data = []
     for row in csvreader:
-        row_add = [row[0], row[int(biodiv_index/2)], row[int(51+biodiv_index/2)]]
+        row_add = [row[0], row[1+int(biodiv_index/2)], row[int(51+biodiv_index/2)]]
         rows_data.append(row_add)
     #endregion
     #region Import data to scan through - dict format and list format
@@ -216,7 +216,7 @@ def succession_dataframe3(data_path, biodiv_index, time_param='Yes', follow_up="
 
         rows_dict = []
         for row in csvreader:
-            row_add = [row[0], row[int(biodiv_index/2)], row[int(51+biodiv_index/2)]]
+            row_add = [row[0], row[1+int(biodiv_index/2)], row[int(51+biodiv_index/2)]]
             rows_dict.append(row_add)
         datas[x] = rows_dict
     # endregion
@@ -235,7 +235,7 @@ def succession_dataframe3(data_path, biodiv_index, time_param='Yes', follow_up="
 
         rows_dict = []
         for row in csvreader:
-            row_add = row[int(biodiv_index/2)]
+            row_add = row[1+ int(biodiv_index/2)]
             rows_dict.append(row_add)
         datas_equiv[x] = rows_dict
         #endregion
@@ -249,7 +249,7 @@ def succession_dataframe3(data_path, biodiv_index, time_param='Yes', follow_up="
 
     rows_dict = []
     for row in csvreader:
-        row_add = row[int(biodiv_index/2)]
+        row_add = row[1+ int(biodiv_index/2)]
         rows_dict.append(row_add)
     datas_equiv[('equiv_results_'+str(match_equiv[2])+'.csv')] = rows_dict
 
@@ -284,7 +284,7 @@ def succession_dataframe3(data_path, biodiv_index, time_param='Yes', follow_up="
 
                     rows_dict = []
                     for row in csvreader:
-                        row_add = [row[0], row[int(biodiv_index/2)], row[int(51+biodiv_index/2)]]
+                        row_add = [row[0], row[1 + int(biodiv_index/2)], row[int(51+biodiv_index/2)]]
                         rows_dict.append(row_add)
                     datas["land3_budget_" + str(params.budget) + "_" + str(check) + ".csv"] = rows_dict
                     d2 = rows_dict
@@ -307,7 +307,7 @@ def succession_dataframe3(data_path, biodiv_index, time_param='Yes', follow_up="
 
                 rows_dict = []
                 for row in csvreader:
-                    row_add = row[int(biodiv_index/2)]
+                    row_add = row[1 + int(biodiv_index/2)]
                     rows_dict.append(row_add)
                 d_equiv = rows_dict
                 datas_equiv[name2] = d_equiv

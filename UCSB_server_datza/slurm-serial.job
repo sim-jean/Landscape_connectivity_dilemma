@@ -1,0 +1,13 @@
+#!/bin/bash  -l
+#SBATCH --nodes=1 --ntasks-per-node 1
+#  this is asking for 1 node, with 1 core (i.e. a Serial job)
+#     the -l is needed on first line if you want to use modules
+
+module load MatLab/R2018a
+
+cd $SLURM_SUBMIT_DIR
+
+/bin/hostname
+
+matlab -nodisplay -nodesktop -nosplash < my-inputfile.m
+

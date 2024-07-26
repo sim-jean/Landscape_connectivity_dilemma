@@ -1,0 +1,92 @@
+$RcppArmadillo
+[1] "RcppArmadillo" "stats"         "graphics"      "grDevices"    
+[5] "utils"         "datasets"      "methods"       "base"         
+
+$crayon
+[1] "crayon"        "RcppArmadillo" "stats"         "graphics"     
+[5] "grDevices"     "utils"         "datasets"      "methods"      
+[9] "base"         
+
+$GA
+ [1] "GA"            "iterators"     "foreach"       "crayon"       
+ [5] "RcppArmadillo" "stats"         "graphics"      "grDevices"    
+ [9] "utils"         "datasets"      "methods"       "base"         
+
+$foreach
+ [1] "GA"            "iterators"     "foreach"       "crayon"       
+ [5] "RcppArmadillo" "stats"         "graphics"      "grDevices"    
+ [9] "utils"         "datasets"      "methods"       "base"         
+
+$iterators
+ [1] "GA"            "iterators"     "foreach"       "crayon"       
+ [5] "RcppArmadillo" "stats"         "graphics"      "grDevices"    
+ [9] "utils"         "datasets"      "methods"       "base"         
+
+$magrittr
+ [1] "magrittr"      "GA"            "iterators"     "foreach"      
+ [5] "crayon"        "RcppArmadillo" "stats"         "graphics"     
+ [9] "grDevices"     "utils"         "datasets"      "methods"      
+[13] "base"         
+
+$dplyr
+ [1] "dplyr"         "magrittr"      "GA"            "iterators"    
+ [5] "foreach"       "crayon"        "RcppArmadillo" "stats"        
+ [9] "graphics"      "grDevices"     "utils"         "datasets"     
+[13] "methods"       "base"         
+
+$reshape2
+ [1] "reshape2"      "dplyr"         "magrittr"      "GA"           
+ [5] "iterators"     "foreach"       "crayon"        "RcppArmadillo"
+ [9] "stats"         "graphics"      "grDevices"     "utils"        
+[13] "datasets"      "methods"       "base"         
+
+$here
+ [1] "here"          "reshape2"      "dplyr"         "magrittr"     
+ [5] "GA"            "iterators"     "foreach"       "crayon"       
+ [9] "RcppArmadillo" "stats"         "graphics"      "grDevices"    
+[13] "utils"         "datasets"      "methods"       "base"         
+
+$Matrix
+ [1] "Matrix"        "here"          "reshape2"      "dplyr"        
+ [5] "magrittr"      "GA"            "iterators"     "foreach"      
+ [9] "crayon"        "RcppArmadillo" "stats"         "graphics"     
+[13] "grDevices"     "utils"         "datasets"      "methods"      
+[17] "base"         
+
+$digest
+ [1] "digest"        "Matrix"        "here"          "reshape2"     
+ [5] "dplyr"         "magrittr"      "GA"            "iterators"    
+ [9] "foreach"       "crayon"        "RcppArmadillo" "stats"        
+[13] "graphics"      "grDevices"     "utils"         "datasets"     
+[17] "methods"       "base"         
+
+$parallel
+ [1] "parallel"      "digest"        "Matrix"        "here"         
+ [5] "reshape2"      "dplyr"         "magrittr"      "GA"           
+ [9] "iterators"     "foreach"       "crayon"        "RcppArmadillo"
+[13] "stats"         "graphics"      "grDevices"     "utils"        
+[17] "datasets"      "methods"       "base"         
+
+$stringr
+ [1] "stringr"       "parallel"      "digest"        "Matrix"       
+ [5] "here"          "reshape2"      "dplyr"         "magrittr"     
+ [9] "GA"            "iterators"     "foreach"       "crayon"       
+[13] "RcppArmadillo" "stats"         "graphics"      "grDevices"    
+[17] "utils"         "datasets"      "methods"       "base"         
+
+$GA
+ [1] "stringr"       "parallel"      "digest"        "Matrix"       
+ [5] "here"          "reshape2"      "dplyr"         "magrittr"     
+ [9] "GA"            "iterators"     "foreach"       "crayon"       
+[13] "RcppArmadillo" "stats"         "graphics"      "grDevices"    
+[17] "utils"         "datasets"      "methods"       "base"         
+
+$stats
+ [1] "stringr"       "parallel"      "digest"        "Matrix"       
+ [5] "here"          "reshape2"      "dplyr"         "magrittr"     
+ [9] "GA"            "iterators"     "foreach"       "crayon"       
+[13] "RcppArmadillo" "stats"         "graphics"      "grDevices"    
+[17] "utils"         "datasets"      "methods"       "base"         
+
+[1] "Adjacency loaded"
+[1] "Base functions imported"

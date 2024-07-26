@@ -2042,3 +2042,113 @@ def statistics_dataframe_centrality(data_path):
 
     #Save data
     checker.to_csv(params.path_to_save_results +"/budget_" + str(params.budget) + "/stat_centrality/stats_centrality_"+data_path)
+
+def coord_potential_treatment(land):
+    """
+    Returns the coordinates of potential treatments for a landscape.
+    :param land:
+    :return:
+    """
+    counterfactual = np.minimum(land + np.repeat(1, params.size ** 2), np.repeat(2, params.size ** 2))
+    coord_raw = np.where(counterfactual == 2)
+    coord_raw = coord_raw[0].tolist()
+    coord_treated = []
+    for j in coord_raw:
+        coord_treated.append((j // params.size, j % params.size))
+
+    return coord_treated
+
+def coord_treatment_2(land1,land2):
+    '''
+    Return where actual treatment was located in matrix coordinates. Associated with t, i.e, treatment applied in t leads to t+1
+    :param land1: np.array
+        land in t
+    :param land2: np.array
+        land in t+1
+    :return:
+    '''
+    counterfactual = np.minimum(land1 + np.repeat(1,params.size**2), np.repeat(2, params.size**2))
+    coord_raw = np.where(counterfactual != np.array(land2))
+    coord_raw = coord_raw[0].tolist()
+    coord_treated = []
+    for j in coord_raw:
+        coord_treated.append((j // params.size, j % params.size))
+
+    return coord_treated
+def distance_corner(coord_treated):
+    """
+    Define distance to corners of a grided landscape
+    :param land1:
+    :param land2:
+    :param timing:
+    :return:
+    """
+    dist = []
+    for x in coord_treated:
+        if x[0] <= 1 and x[1] <= 1:
+            dist.append(math.sqrt(x[0] ** 2 + x[1] ** 2))
+        elif x[0] <= 1 and x[1] > 1:
+            dist.append(math.sqrt(x[0] ** 2 + ((params.size-1) - x[1]) ** 2))
+        elif x[0] > 1 and x[1] <= 1:
+            dist.append(math.sqrt(((params.size-1) - x[0]) ** 2 + x[1] ** 2))
+        elif x[0] > 1 and x[1] > 1:
+            dist.append(math.sqrt(((params.size-1) - x[0]) ** 2 + ((params.size-1) - x[1]) ** 2))
+
+    return dist
+
+def data_fix_coord(data_path):
+    '''
+    Fix data for coordinates of treatment. In row : potential treatment location, actual treatment employed to yield to next row
+    :param data_path: int
+        path to data
+    :return: .csv
+    '''
+    #data_dev = pd.read("/home/simonjean/data/budget_" + str(params.budget) + "/statistics/" + data_path)
+
+    data_dev = pd.read_csv("C:/Users/jean/PycharmProjects/connectivity_dilemma/data4/results_habitat_availability/budget_"+str(params.budget)+"/"+data_path)
+
+    data_process = data_dev["value"]
+    data_process_l = list(data_process)
+    data_process_l = [np.array(ast.literal_eval(x)) for x in data_process_l]
+
+    potential_treatment = list(map(coord_potential_treatment, data_process_l))
+
+    all_res = []
+    lengths = []
+    dist_realized = []
+    dist_realized_mean = []
+    dist_potential = []
+    dist_potential_mean = []
+
+    for x in range(0,len(data_process_l),20):
+        a = []
+        for row in range(19):
+            a.append(coord_treatment_2(data_process_l[x+row],data_process_l[x+row+1]))
+        a.append(None)
+        all_res.extend(a)
+
+    for y in all_res:
+        try:
+            lengths.append(len(y))
+        except TypeError:
+            lengths.append(None)
+
+        if y==None:
+            dist_realized.append(None)
+            dist_realized_mean.append(None)
+        else:
+            dist_realized_mean.append(stats.mean(distance_corner(y)))
+            dist_realized.append(distance_corner(y))
+
+    for z in potential_treatment:
+        dist_potential.append(distance_corner(z))
+        dist_potential_mean.append(stats.mean(distance_corner(z)))
+
+    data_dev['potential_treatment'] = potential_treatment
+    data_dev['realized_treatment'] = all_res
+    data_dev['nb_realized_treatment'] = lengths
+
+    data_dev['average_distance_potential'] = dist_potential_mean
+    data_dev['distance_potential'] = dist_potential
+    data_dev['average_distance_realized'] = dist_realized_mean
+    data_dev['distance_realized'] = dist_realized

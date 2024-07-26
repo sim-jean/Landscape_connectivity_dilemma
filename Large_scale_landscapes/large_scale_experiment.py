@@ -7,6 +7,7 @@ import numpy as np
 import itertools
 import pandas as pd
 import networkx as nx
+import itertools
 import matplotlib.pyplot as plt
 import seaborn as sns
 import math
@@ -126,7 +127,7 @@ size = 12
 landscape = np.random.randint(0,3,size**2)
 
 # Define budget as a share of potential treatment, assuming homogeneous costs
-budget = int(round(0.22 * size**2))
+budget = int(round(0.15 * size**2))
 if budget <= 5:
     budget = 5
 
@@ -147,5 +148,17 @@ for landscape in landscapes:
     a_mat = landscape.reshape(size,size)
     sns.heatmap(a_mat, ax=ax, linewidth=0.5, cmap="Greens", vmin=min(landscape), vmax=2, center=1)
     plt.show()
+
+#endregion
+
+#region Attempt with brute force algo
+    # Generate and save all potential fires and save and apply low_lev_dynprog
+    # Loop only on potential fires that meet budget criterion.
+checker = itertools.product((0,1), repeat = size**2)
+
+nb_treat = 0
+for x in checker:
+    if sum(x) <= budget:
+        nb_treat +=1
 
 #endregion

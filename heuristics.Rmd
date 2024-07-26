@@ -1,0 +1,783 @@
+---
+title: "Attempt at optimization heurstics"
+author: "Simon Jean"
+date: "2024-07-12"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list = ls())
+library(dplyr)
+library(ggplot2)
+library(magrittr)
+library(GA)
+library(landscapeR)
+library(here)
+library(raster)
+```
+
+
+# I. Initiate landscape and visualization
+
+In this setting, it would be interesting to be able to generate landscapes that have spatial autocorrelation. 
+
+```{r, code_chunk}
+# I. Parameters
+
+size = 4
+budget = round(size^2/5) +1
+green_palette = c('0' = 'cornsilk',
+                  '1' = 'lightgreen',
+                  '2' = 'darkgreen')
+
+# II. Generate landscape ####
+m  = matrix(0, size, size)
+r  = raster(m, xmn = 0, xmx = size, ymn = 0, ymx = size)
+
+num1 = round(runif(1, 1, 2*size))
+if(num1 == 0){
+  size1 = 0
+}else{
+  size1 = round(runif(num1, 1, .8*size))
+}
+r = makeClass(r, num1, size1, val = 1)
+
+num2 = round(runif(1, size*0.5, 2*size))
+size2 = round(runif(num2, 1, .8*size))
+rr = makeClass(r, num2, size2, val= 2)
+
+
+# Visualization function 
+
+viz_landscape = function(land){
+  # Input is a raster
+  as.data.frame(land, xy=T)%>%
+  mutate(layer = as.factor(layer))%>%
+  ggplot(aes(x=x,
+             y=y,
+             fill = layer))+
+  geom_tile()+
+  scale_fill_manual(values = green_palette)+
+  theme_bw()
+}
+
+viz_landscape(rr)
+
+```
+
+
+Second, I convert the data to a `SparseMatrix`, and set up the `kings_graph()` function to generate adjacency matrices, as well as the payoff function to be optimized, including penalties for the biodiversity constraint and the budget constraints. 
+
+```{r, convert raster to sparse and set up functions}
+# Set landscape 
+landscape = Matrix(rr@data@values, sparse = T)
+
+#landscape = Matrix(2, nrow = size, ncol= size)
+
+# Set adjacency
+kings_graph  =  function(n, timer_ = T) {
+  if(timer_ == T){
+    start = Sys.time()
+  }
+  # Initialize the adjacency matrix with zeros
+  adj_matrix  =  Matrix(0, nrow = n*n, ncol = n*n, sparse = T)
+  # Define potential moves (king moves in chess)
+  moves  =  rbind(c(-1, -1), c(-1, 0), c(-1, 1), c(0, -1), c(0, 1), c(1, -1), c(1, 0), c(1, 1), c(0,0))
+  
+  # Helper function to safely add edges
+  add_edge  =  function(i, j) {
+    if (i >= 1 && i <= n*n && j >= 1 && j <= n*n) {
+      adj_matrix[i,j]  =  1
+      adj_matrix[j,i]  =  1
+    }
+    return(adj_matrix)
+  }
+  
+  # Map each square to its neighbors
+  for (row in 1:n) {
+    for (col in 1:n) {
+      index  =  (row - 1) * n + col
+      
+      for (move in 1:nrow(moves)) {
+        neighbor_row  =  row + moves[move, 1]
+        neighbor_col  =  col + moves[move, 2]
+        if (neighbor_row > 0 && neighbor_row <= n && neighbor_col > 0 && neighbor_col <= n) {
+          neighbor_index  =  (neighbor_row - 1) * n + neighbor_col
+          if(adj_matrix[index,neighbor_index] == 0){
+            adj_matrix = add_edge(index, neighbor_index) 
+          }
+        }
+      }
+    }
+  }
+  if(timer_ == T){
+    end  =  Sys.time()
+    time_taken  =  end - start
+    return(list(matrix = adj_matrix, time = time_taken))
+  } else {
+    return(adj_matrix)
+  }
+}
+
+if(file.exists(here("intermediate_products",paste0("adjacency_", size, ".mtx")))){
+  adjacency_ = readMM(here("intermediate_products",paste0("adjacency_", size, ".mtx")))
+}else{
+  adjacency_ = kings_graph(size)[1][[1]]
+  writeMM(adjacency_, file = here("intermediate_products",paste0("adjacency_", size, ".mtx")))
+}
+
+# Set biodiv
+max_biodiv = as.numeric(Matrix(1, nrow = 1, ncol = size^2, sparse = T)%*%
+  adjacency_ %*%
+  Matrix(1, ncol = 1, nrow = size^2, sparse = T))
+
+### Static optimization ####
+
+fitness_function <- function(treatments,
+                             B_ = budget) {
+  # Inputs : 
+    # Treatment is a binary vector of size N^2
+    # Landscape is a vector as well 
+  
+  # Apply treatments to the landscape
+  treated_landscape = landscape * (1 - treatments) 
+  
+  # Compute the first quadratic form
+  score1 = as.numeric(t(Matrix(ifelse(treated_landscape == 2, 1, 0),
+                    sparse = T)) %*% 
+    adjacency_ %*% 
+    Matrix(ifelse(treated_landscape == 2, 1, 0), sparse = T))
+  
+  score2 = as.numeric(t(Matrix(ifelse(treated_landscape > 0, 1, 0), 
+                    sparse = T)) %*% 
+    adjacency_ %*% 
+    Matrix(ifelse(treated_landscape > 0, 1, 0), sparse = T))
+  
+  # Define adaptive constraints : 
+  constraint_budget = B_ - sum(treatments)
+  constraint_biod   = const_ - score2
+  
+  penalty1 = ifelse(constraint_budget >=0, 0, 10^4*abs(constraint_budget))
+  penalty2 = ifelse(constraint_biod <= 0, 0, 10^4*abs(constraint_biod))
+  
+  # Compute the objective function
+  result = -(score1 + penalty1 + penalty2)
+  return(result)
+}
+
+repair_function = function(pop) {
+  max_ones = budget
+  for (i in 1:nrow(pop)) {
+    num_ones = sum(pop[i,])
+    if (num_ones > max_ones) {
+      ones_indices = which(pop[i,] == 1)
+      excess_ones = sample(ones_indices, num_ones - max_ones)
+      pop[i, excess_ones] = 0
+    }
+  }
+  return(pop)
+}
+
+scores = function(landscape, type = 'B'){
+  score1 = as.numeric(t(Matrix(ifelse(landscape == 2, 1, 0),
+                    sparse = T)) %*% 
+    adjacency_ %*% 
+    Matrix(ifelse(landscape == 2, 1, 0), sparse = T))
+  
+  score2 = as.numeric(t(Matrix(ifelse(landscape > 0, 1, 0), 
+                    sparse = T)) %*% 
+    adjacency_ %*% 
+    Matrix(ifelse(landscape > 0, 1, 0), sparse = T))
+  if(type == 'B'){
+    return(score2)
+  }else{
+    return(score1)
+  }
+}
+
+```
+
+Do a diagnosis of the landscape : what is the original risk, what is the original biodiversity score? Indeed, if the biodiversity score already does not meet the biodiversity constraint, we do not act. 
+
+```{r, original diagnosis}
+dat_og = data.frame(
+  biod_og = scores(landscape),
+  fuel_og = scores(landscape, 'F')
+)
+head(dat_og)
+```
+
+To improve on the genetic algorithm, a selection of initial solution may be better. My initial results show that:
+* When the biodiversity constraint is low, need to tackle the most central nodes.
+* When the biodiversity constraint is average, the budget is still respected, but treatments are reshuffled at lower degree nodes
+* When the biodiversity constraint is large, the budget is not respected, less are treated, and treatments are reshuffled to lower degree nodes
+
+```{r, function for selection}
+degrees = as.vector(t(Matrix(ifelse(landscape == 2, 1, 0),
+                    sparse = T)) %*% 
+    adjacency_)
+
+generate_binary_matrix <- function(N, length_of_vector, preferential_locations, X) {
+  # N: number of binary vectors to generate
+  # length_of_vector: the length of each binary vector
+  # preferential_locations: indices where the 1s are preferentially located
+  # X: maximum number of 1s in each vector
+
+  # Initialize a matrix to store the generated binary vectors
+  binary_matrix <- matrix(0, nrow = N, ncol = length_of_vector)
+  
+  for (i in 1:N) {
+    # Initialize a binary vector with all 0s
+    binary_vector <- rep(0, length_of_vector)
+    
+    # Randomly select the number of 1s to place, not exceeding X
+    num_ones = X
+    
+    # Ensure preferential locations are not greater than the number of available positions
+    num_preferential <- min(num_ones, length(preferential_locations))
+    
+    # Randomly select indices from preferential locations for the 1s
+    if (num_preferential > 0) {
+      selected_indices <- sample(preferential_locations, num_preferential)
+    } else {
+      selected_indices <- integer(0)
+    }
+    
+    # Place 1s in the selected preferential locations
+    binary_vector[selected_indices] <- 1
+    
+    # If needed, fill the remaining 1s in non-preferential locations
+    remaining_ones <- num_ones - num_preferential
+    if (remaining_ones > 0) {
+      # Define non-preferential locations
+      non_preferential_locations <- setdiff(1:length_of_vector, preferential_locations)
+      
+      # Randomly select remaining positions for the 1s
+      remaining_indices <- sample(non_preferential_locations, remaining_ones)
+      
+      # Place the remaining 1s
+      binary_vector[remaining_indices] <- 1
+    }
+    
+    # Store the generated binary vector in the matrix
+    binary_matrix[i, ] <- binary_vector
+  }
+  
+  return(Matrix(binary_matrix, sparse = T))
+}
+
+```
+
+
+
+Then, I run the genetic algorithm : 
+
+```{r, genetic}
+popSize_ = 200
+
+
+const_ = round(max_biodiv/5)
+
+
+if(const_ <= dat_og$biod_og){
+  if(const_ <= .3*max_biodiv){
+    suggestions_ = generate_binary_matrix(popSize_, 
+                                      size^2,
+                                      which(degrees== max(degrees)),
+                                      budget)
+  }else{
+    suggestions_ = generate_binary_vectors(popSize_, 
+                                          size^2,
+                                          which(degrees != max(degrees)), budget)
+    # random_:
+    suggestions_random = matrix(rbinom(popSize_ * size^2, 1, budget/size^2*0.9), nrow = popSize_, ncol = size^2)
+  }
+  
+  if(size %in%c(3,4)){
+    maxIter_ = 25
+  }else{
+    maxIter_ = 100
+  }
+  
+  timer__ = Sys.time()
+  
+  ga_result = ga(
+    type = "binary",
+    fitness = fitness_function,
+    nBits = size^2,       # Number of bits in the binary vector (size of the landscape)
+    maxiter = maxIter_,   # Number of generations
+    popSize = popSize_,    # Population size
+    pcrossover = 0.8,# Crossover probability
+    pmutation = 0.2, # Mutation probability
+    suggestions = suggestions_,
+    monitor = T
+  )
+  print(Sys.time() - timer__)
+### Illustration to see if it works
+  summary(ga_result)
+  
+}else{
+ print('Baseline landscape cannot accomodate biodiversity constraint')
+}
+```
+
+I just give solutions with a good level of budget constraint satisfaction. It could be worth something to investigate a different initial solution based on my previous findings : 
+
+1. Compute node distribution in the two graphs
+2. Find the largest degree nodes in both graphs
+3. Depending on the value of the constraint, play on the selection of potential treatments such that : 
+* If low, just a solution that respects the budget
+* If medium, keep budget but not at the largest degree nodes. 
+* If high, lower budget and find some nodes with large degree and low degree. 
+
+Something is weird here : there's something I don't get, with what constraint is fucked at some point; is it the biodiversity constraint, or the budget constraint. I think it may be the biodiversity constraint that is not satisfied with a given budget. Maybe there's a way for me to fix or redirect the search? Like tell the algorigthm, at some point, look in this direction. 
+Illustrate the results : 
+
+```{r, statistics of output}
+# Find lowest budgets : 
+budg_eff = vector('list', nrow(ga_result@solution))
+
+for(i in 1:nrow(ga_result@solution)){
+  budg_eff[i] = sum(ga_result@solution[i,])
+}
+budg_eff = unlist(budg_eff)
+treatment_id = which(budg_eff == min(budg_eff))
+if(length(treatment_id)>1){
+ treatment_id = treatment_id[1,]
+}
+
+
+treatment_ = ga_result@solution[treatment_id,]
+budg_effective = sum(treatment_)
+
+fuel_score= as.numeric(t(landscape*(1-treatment_))>1)%*%adjacency_%*% as.numeric(landscape*(1-treatment_)>1)
+biod_score= as.numeric(t(landscape*(1-treatment_))>0)%*%adjacency_%*% as.numeric(landscape*(1-treatment_)>0)
+
+dat_ = data.frame(budget = budget, 
+                  expenses = budg_effective, 
+                  risk= as.numeric(fuel_score), 
+                  risk_reduction = (dat_og$fuel_og - as.numeric(fuel_score))/dat_og$fuel_og*100,
+                  constraint = const_, 
+                  biodiv = as.numeric(biod_score))
+head(dat_)
+```
+So everything seems to be satisfied here. Need to find a way to reshuffle the decision when the algo is stuck somewhere. 
+
+
+```{r, plots of outputs}
+a = rr
+a = setValues(a, matrix(landscape, nrow = size))
+#plot(a)
+
+viz_landscape(a)
+
+
+
+b = rr
+b = setValues(b, matrix(landscape*(1 - treatment_), nrow = size))
+#plot(b)
+
+viz_landscape(b)
+
+```
+Plot of treatments and degrees : 
+
+```{r, degrees and treatments}
+c = rr
+c = setValues(c, matrix(treatment_, nrow = size))
+plot(c)
+#viz_landscape(c)
+
+d = rr
+d = setValues(c,matrix(degrees, nrow=size))
+plot(d)
+
+```
+
+
+Evaluate the solutions : 
+
+```{r, evaluate solutions}
+as.numeric(t(landscape*(1-treatment_))>1)%*%adjacency_%*% as.numeric(landscape*(1-treatment_)>1)
+
+
+treatment_b = c(0,0,0,0,1,1,1,0,0,0,0,0,0,0,0,0)
+as.numeric(t(landscape*(1-treatment_b))>1)%*%adjacency_%*% as.numeric(landscape*(1-treatment_b)>1)
+
+```
+
+
+```{r, other approach}
+
+best_solution <- ga_result@solution
+
+# Ensure the final population contains the best solutions found
+final_population <- ga_result@population
+best_individuals <- final_population[order(apply(final_population, 1, fitness_function), decreasing = TRUE), ]
+
+b = rr
+b = setValues(b, matrix(landscape*(1 - best_individuals[26,]), nrow = size))
+plot(b)
+
+```
+
+
+## New Approach for 3 period dynamic optimization
+
+The idea is clear : have a 3 period built in objective function, which takes as input a vector of , and returns the value, and the succession of optimal treatments
+
+First, I import some basic functions :
+
+* `kings_graph` : generates a king graph adjacency matrix for graph of with `size` nodes
+* `mature_cells`: generates a binary vector for cells that can host biodiversity
+* `burn_cells` : generates a binary vector for cells that can burn
+* `mature_score`: generates the connectivity score associated with each objective
+* `age_dyn`: computes the age dynamics
+* `visualise_transition`: visualises the evolution of treatments and landscapes.
+
+```{r, basic functions}
+kings_graph  =  function(n, timer_ = T) {
+  if(timer_ == T){
+    start = Sys.time()
+  }
+  # Initialize the adjacency matrix with zeros
+  adj_matrix  =  Matrix(0, nrow = n*n, ncol = n*n)
+  # Define potential moves (king moves in chess)
+  moves  =  rbind(c(-1, -1), c(-1, 0), c(-1, 1), c(0, -1), c(0, 1), c(1, -1), c(1, 0), c(1, 1), c(0,0))
+
+  # Helper function to safely add edges
+  add_edge  =  function(i, j) {
+    if (i >= 1 && i <= n*n && j >= 1 && j <= n*n) {
+      adj_matrix[i,j]  =  1
+      adj_matrix[j,i]  =  1
+    }
+    return(adj_matrix)
+  }
+  
+  # Map each square to its neighbors
+  for (row in 1:n) {
+    for (col in 1:n) {
+      index  =  (row - 1) * n + col
+      
+      for (move in 1:nrow(moves)) {
+        neighbor_row  =  row + moves[move, 1]
+        neighbor_col  =  col + moves[move, 2]
+        if (neighbor_row > 0 && neighbor_row <= n && neighbor_col > 0 && neighbor_col <= n) {
+          neighbor_index  =  (neighbor_row - 1) * n + neighbor_col
+          if(adj_matrix[index,neighbor_index] == 0){
+            adj_matrix = add_edge(index, neighbor_index) 
+          }
+        }
+      }
+    }
+  }
+  if(timer_ == T){
+    end  =  Sys.time()
+    time_taken  =  end - start
+    return(list(matrix = adj_matrix, time = time_taken))
+  } else {
+    return(adj_matrix)
+  }
+}
+
+adjacency_ = kings_graph(size)$matrix
+
+mature_cells = function(matrix){
+  to_ret = Matrix(as.numeric(matrix>0), ncol = 1, sparse = T)
+  return(to_ret)
+}
+
+burn_cells = function(matrix){
+  to_ret = Matrix(as.numeric(matrix>1), ncol = 1, sparse = T)
+  return(to_ret)
+}
+
+mature_score = function(matrix, 
+                        type_ = 'B',
+                        adj_ = adjacency_){
+  if(type_ == 'B'){
+    return(t(mature_cells(matrix)) %*% adj_ %*% mature_cells(matrix))
+  }else{
+    return(t(burn_cells(matrix)) %*% adj_ %*% burn_cells(matrix))
+  }
+}
+
+age_dyn = function(landscape){
+  landscape = Matrix(landscape, ncol = 1, sparse = T)
+  #treatment = Matrix(treatment, ncol = 1, sparse = T)
+  
+  #augmented_mat = landscape + 1
+  #capped_mat = pmin(augmented_mat, 2)
+  
+  #treatment_ = 1 - treatment
+  #next_ = landscape * treatment_
+  
+  next_ = landscape + 1
+  next_ = pmin(next_, 2)
+  
+  next_ = Matrix(as.numeric(next_), nrow = 1, byrow= T, sparse = T)
+  return(next_)
+}
+
+visualise_transition = function(landscape, treatment){
+  # Evaluate 3 landscapes : 
+  landscape_init = as.vector(landscape)
+  landscape_post_treat = unname(landscape*(1 - treatment[1: index1]))
+  landscape_init1 = as.vector(age_dyn(landscape_post_treat))
+  landscape_post_treat1 = as.vector(landscape_init1*(1 - treatment[index2:index3]))
+  landscape_init2 = as.vector(age_dyn(landscape_post_treat1))
+  landscape_post_treat2 = as.vector(landscape_init2*(1 - treatment[index4:index5]))
+  
+  markers_1 = c(rep('initial', size^2),
+               rep('post_treat0', size^2),
+               rep('initial1', size^2),
+               rep('post_treat1', size^2),
+               rep('initial2', size^2),
+               rep('post_treat2', size^2))
+  markers_2 = c(rep(0,2*size^2),
+                rep(1,2*size^2),
+                rep(2,2*size^2))
+  
+  dat_ =  as.data.frame(as.table(matrix(landscape_init,size,size)))%>%
+      mutate(Var1 = as.numeric(Var1),
+             Var2 = as.numeric(Var2))
+
+  for(x in c('landscape_post_treat', 'landscape_init1', 'landscape_post_treat1', 
+             'landscape_init2', 'landscape_post_treat2')){
+    
+    candit = eval(parse(text = x))
+    dat__ = as.data.frame(as.table(matrix(candit, size, size)))%>%
+      mutate(Var1 = as.numeric(Var1),
+             Var2 = as.numeric(Var2))
+    dat_ = rbind(dat_, dat__)
+  }
+  
+  dat_ = dat_%>%
+    mutate(markers1 = factor(markers_,
+                            levels = c('initial', 'post_treat0', 'initial1',
+                                       'post_treat1', 'initial2', 'post_treat2')),
+           markers2 = factor(markers_2),
+           Freq = as.factor(Freq))
+  
+  dat_ %>%
+    ggplot(aes(x=Var1, y=Var2, fill = Freq))+
+    geom_tile()+
+    scale_fill_manual(values = green_palette)+
+    facet_grid(markers2~markers1)+
+    coord_fixed()
+}
+
+```
+
+
+```{r, built in dynopt}
+
+const_ = max_biodiv/5
+index1= size^2
+index2 = size^2+1
+index3 = 2*size^2
+index4 = 2*size^2+1
+index5 = 3*size^2
+
+jvlivs = function(treatments_, 
+                  landscape_ = landscape,
+                  B_ = budget,
+                  constant_ = const_){
+  # First try is landscape is 3*N^2
+  # Generate indexes:
+
+  
+  # Generate treatments
+  treatment1 = treatments_[1:index1]
+  treatment2 = treatments_[index2:index3]
+  treatment3 = treatments_[index4:index5]
+
+  #Landscape and scores : 
+  
+    # Period 1 : 
+  landscape_treated1 = landscape*(1 - treatment1)
+  score_fuel1 = mature_score(landscape_treated1, "F")
+  score_biod1 = mature_score(landscape_treated1)
+  
+  # Period 2:
+  suppressWarnings({
+      landscape_treated2 = age_dyn(landscape_treated1)*(1 - treatment2)
+  })
+  score_fuel2 = mature_score(landscape_treated2, "F")
+  score_biod2 = mature_score(landscape_treated2)
+
+  # Period 3:
+  suppressWarnings({
+      landscape_treated3 = age_dyn(landscape_treated2)*(1 - treatment3)
+  })
+  score_fuel3 = mature_score(landscape_treated3, "F")
+  score_biod3 = mature_score(landscape_treated3)
+  
+  
+  # Constraints : 
+    # Period1
+  constraint_budget1 = B_ - sum(treatment1)
+  constraint_biod1   = constant_ - score_biod1
+  
+  penalty1_1 = ifelse(constraint_budget1 >=0, 0, 10^4*abs(constraint_budget1))
+  penalty2_1 = ifelse(constraint_biod1 <= 0, 0, 10^4*abs(constraint_biod1))
+    # Period2
+  constraint_budget2 = B_ - sum(treatment2)
+  constraint_biod2   = constant_ - score_biod2
+  
+  penalty1_2 = ifelse(constraint_budget2 >=0, 0, 10^4*abs(constraint_budget2))
+  penalty2_2 = ifelse(constraint_biod2 <= 0, 0, 10^4*abs(constraint_biod2))
+    # Period3
+  constraint_budget3 = B_ - sum(treatment3)
+  constraint_biod3   = constant_ - score_biod3
+  
+  penalty1_3 = ifelse(constraint_budget3 >=0, 0, 10^4*abs(constraint_budget3))
+  penalty2_3 = ifelse(constraint_biod3 <= 0, 0, 10^4*abs(constraint_biod3))
+  
+  value_ = -(score_fuel1 + score_fuel2 + score_fuel3 +
+    penalty1_1 + penalty1_2 + penalty1_3 +
+    penalty2_1 + penalty2_2 + penalty2_3)
+  
+  return(as.numeric(value_))
+}
+
+tester = round(runif(3*size^2,0,1))
+landscape
+jvlivs(tester)
+```
+
+
+Evaluate the performance of the function : 
+
+```{r, threepeat}
+popSize_ = 200
+
+
+const_ = round(max_biodiv/5)
+
+
+#if(const_ <= dat_og$biod_og){
+#  if(const_ <= .3*max_biodiv){
+#    suggestions_ = generate_binary_matrix(popSize_, 
+#                                      size^2,
+#                                      which(degrees== max(degrees)),
+#                                      budget)
+#  }else{
+#    suggestions_ = generate_binary_vectors(popSize_, 
+#                                          size^2,
+#                                          which(degrees != max(degrees)), budget)
+    # random_:
+suggestions_ = matrix(rbinom(popSize_ * 3*size^2, 1, budget/size^2*0.9), nrow = popSize_, ncol = 3*size^2)
+#  }
+  
+#if(size %in%c(3,4)){
+#  maxIter_ = 25
+#}else{
+#  maxIter_ = 100
+#}
+
+maxIter_ = 100
+
+timer__ = Sys.time()
+  
+ga_result = ga(
+    type = "binary",
+    fitness = jvlivs,
+    nBits = 3*size^2,       # Number of bits in the binary vector (size of the landscape)
+    maxiter = maxIter_,   # Number of generations
+    popSize = popSize_,    # Population size
+    pcrossover = 0.8,# Crossover probability
+    pmutation = 0.2, # Mutation probability
+    suggestions = suggestions_,
+    monitor = T
+  )
+
+print(Sys.time() - timer__)
+### Illustration to see if it works
+summary(ga_result)
+  
+#}else{
+# print('Baseline landscape cannot accomodate biodiversity constraint')
+#}
+
+```
+
+```{r, data on performance}
+# Find lowest budgets : 
+budg_eff = vector('list', nrow(ga_result@solution))
+
+for(i in 1:nrow(ga_result@solution)){
+  budg_eff[i] = sum(ga_result@solution[i,])
+}
+budg_eff = unlist(budg_eff)
+treatment_id = which(budg_eff == min(budg_eff))
+if(length(treatment_id)>1){
+ treatment_id = treatment_id[1]
+}
+treatment_ = ga_result@solution[treatment_id,]
+
+
+# Budgets
+budg_effective0 = sum(treatment_[1:index1])
+budg_effective1 = sum(treatment_[index2:index3])
+budg_effective2 = sum(treatment_[index4:index5])
+
+# Successions
+post_treat0 = as.numeric(landscape * (1 - treatment[1:index1]))
+post_treat1 = as.numeric(age_dyn(post_treat0) * (1- treatment[index2:index3]))
+post_treat2 = as.numeric(age_dyn(post_treat1) * (1- treatment[index4:index5]))
+
+# Scores 
+fuel_score0 = scores(post_treat0,"F")
+fuel_score1 = scores(post_treat1,"F")
+fuel_score2 = scores(post_treat2,"F")
+
+biod_score0 = scores(post_treat0,"B")
+biod_score1 = scores(post_treat1,"B")
+biod_score2 = scores(post_treat2,"B")
+
+dat_ = data.frame(budget = budget, 
+                  expenses0 = budg_effective0, 
+                  expenses1 = budg_effective1, 
+                  expenses2 = budg_effective2, 
+                  #
+                  risk0 = fuel_score0,
+                  risk1 = fuel_score1,
+                  risk2 = fuel_score2,
+                  #
+                  constraint = const_, 
+                  biodiv0 = biod_score0,
+                  biodiv1 = biod_score1,
+                  biodiv2 = biod_score2)
+head(dat_)
+
+
+```
+
+Now, function to visualize : 
+
+```{r, vizualize succession}
+visualise_transition(landscape,treatment_)
+```
+
+
+
+
+## NSGA II algorithm
+```{r, new algo}
+if(!("mco" %in% installed.packages())){
+  install.packages("mco")
+}
+library(mco)
+```
+
+Use NSGA II algorithm, with two different objectives
+
+```{r, adapted objective}
+
+fitness_nsga = function(treatments){
+  
+}
+
+```

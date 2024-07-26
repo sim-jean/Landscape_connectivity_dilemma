@@ -23,7 +23,7 @@ import itertools
 
 # Values
 budget = 4
-size = 3
+size = 4
 R = size**2
 
 # Biodiversity and fire thresholds

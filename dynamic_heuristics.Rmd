@@ -1,0 +1,1035 @@
+---
+title: "Dynamic heuristics"
+author: "Simon Jean"
+date: "2024-07-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F)
+rm(list = ls())
+
+library(dplyr)
+library(ggplot2)
+library(magrittr)
+library(GA)
+library(landscapeR)
+library(here)
+library(raster)
+library(landscapetools)
+library(NLMR)
+###
+
+size = 100
+budget = round(size^2/5) + 1
+
+green_palette = c('0' = 'cornsilk',
+                  '1' = 'lightgreen',
+                  '2' = 'darkgreen')
+```
+
+## I. Import functions
+
+First, I import some basic functions :
+
+* `kings_graph` : generates a king graph adjacency matrix for graph of with `size` nodes
+* `mature_cells`: generates a binary vector for cells that can host biodiversity
+* `burn_cells` : generates a binary vector for cells that can burn
+* `mature_score`: generates the connectivity score associated with each objective
+* `age_dyn`: computes the age dynamics
+* `visualise_transition`: visualises the evolution of treatments and landscapes.
+* `degree` : gives the degrees of each nodes
+* `generate_binary_matrix` : generate pool of initial candidates
+
+```{r, import some functions}
+
+kings_graph  =  function(n, timer_ = T) {
+  if(timer_ == T){
+    start = Sys.time()
+  }
+  # Initialize the adjacency matrix with zeros
+  adj_matrix  =  Matrix(0, nrow = n*n, ncol = n*n, sparse = T)
+  # Define potential moves (king moves in chess)
+  moves  =  rbind(c(-1, -1), c(-1, 0), c(-1, 1), c(0, -1), c(0, 1), c(1, -1), c(1, 0), c(1, 1), c(0,0))
+  
+  # Helper function to safely add edges
+  add_edge  =  function(i, j) {
+    if (i >= 1 && i <= n*n && j >= 1 && j <= n*n) {
+      adj_matrix[i,j]  =  1
+      adj_matrix[j,i]  =  1
+    }
+    return(adj_matrix)
+  }
+  
+  # Map each square to its neighbors
+  for (row in 1:n) {
+    for (col in 1:n) {
+      index  =  (row - 1) * n + col
+      
+      for (move in 1:nrow(moves)) {
+        neighbor_row  =  row + moves[move, 1]
+        neighbor_col  =  col + moves[move, 2]
+        if (neighbor_row > 0 && neighbor_row <= n && neighbor_col > 0 && neighbor_col <= n) {
+          neighbor_index  =  (neighbor_row - 1) * n + neighbor_col
+          if(adj_matrix[index,neighbor_index] == 0){
+            adj_matrix = add_edge(index, neighbor_index) 
+          }
+        }
+      }
+    }
+  }
+  if(timer_ == T){
+    end  =  Sys.time()
+    time_taken  =  end - start
+    return(list(matrix = adj_matrix, time = time_taken))
+  } else {
+    return(adj_matrix)
+  }
+}
+
+if(file.exists(here("intermediate_products",paste0("adjacency_", size, ".mtx")))){
+  adjacency_ = readMM(here("intermediate_products",paste0("adjacency_", size, ".mtx")))
+}else{
+  adjacency_ = kings_graph(size)[1][[1]]
+  writeMM(adjacency_, file = here("intermediate_products",paste0("adjacency_", size, ".mtx")))
+}
+
+mature_cells = function(matrix){
+  to_ret = Matrix(as.numeric(matrix>0), ncol = 1, sparse = T)
+  return(to_ret)
+}
+
+burn_cells = function(matrix){
+  to_ret = Matrix(as.numeric(matrix>1), ncol = 1, sparse = T)
+  return(to_ret)
+}
+
+mature_score = function(matrix, 
+                        type_ = 'B',
+                        adj_ = adjacency_){
+  if(type_ == 'B'){
+    return(as.numeric(t(mature_cells(matrix)) %*% adj_ %*% mature_cells(matrix)))
+  }else{
+    return(as.numeric(t(burn_cells(matrix)) %*% adj_ %*% burn_cells(matrix)))
+  }
+}
+
+age_dyn = function(landscape){
+  landscape = Matrix(landscape, ncol = 1, sparse = T)
+  #treatment = Matrix(treatment, ncol = 1, sparse = T)
+  
+  #augmented_mat = landscape + 1
+  #capped_mat = pmin(augmented_mat, 2)
+  
+  #treatment_ = 1 - treatment
+  #next_ = landscape * treatment_
+  
+  next_ = landscape + 1
+  next_ = pmin(next_, 2)
+  
+  next_ = Matrix(as.numeric(next_), nrow = 1, byrow= T, sparse = T)
+  return(next_)
+}
+
+viz_landscape = function(land){
+  # Input is a raster
+  as.data.frame(land, xy=T)%>%
+  mutate(layer = as.factor(layer))%>%
+  ggplot(aes(x=x,
+             y=y,
+             fill = layer))+
+  geom_tile()+
+  scale_fill_manual(values = green_palette)+
+  theme_minimal()
+}
+
+
+
+visualise_transition = function(landscape, treatment){
+  # Evaluate 3 landscapes : 
+  landscape_init = as.vector(landscape)
+  landscape_post_treat = unname(landscape*(1 - treatment[1: index1]))
+  landscape_init1 = as.vector(age_dyn(landscape_post_treat))
+  landscape_post_treat1 = as.vector(landscape_init1*(1 - treatment[index2:index3]))
+  landscape_init2 = as.vector(age_dyn(landscape_post_treat1))
+  landscape_post_treat2 = as.vector(landscape_init2*(1 - treatment[index4:index5]))
+  
+  markers_1 = c(rep('initial', size^2),
+               rep('post_treat0', size^2),
+               rep('initial1', size^2),
+               rep('post_treat1', size^2),
+               rep('initial2', size^2),
+               rep('post_treat2', size^2))
+  markers_2 = c(rep(0,2*size^2),
+                rep(1,2*size^2),
+                rep(2,2*size^2))
+  
+  dat_ =  as.data.frame(as.table(matrix(landscape_init,size,size)))%>%
+      mutate(Var1 = as.numeric(Var1),
+             Var2 = as.numeric(Var2))
+
+  for(x in c('landscape_post_treat', 'landscape_init1', 'landscape_post_treat1', 
+             'landscape_init2', 'landscape_post_treat2')){
+    
+    candit = eval(parse(text = x))
+    dat__ = as.data.frame(as.table(matrix(candit, size, size)))%>%
+      mutate(Var1 = as.numeric(Var1),
+             Var2 = as.numeric(Var2))
+    dat_ = rbind(dat_, dat__)
+  }
+  
+  dat_ = dat_%>%
+    mutate(markers1 = factor(markers_1,
+                            levels = c('initial', 'post_treat0', 'initial1',
+                                       'post_treat1', 'initial2', 'post_treat2')),
+           markers2 = factor(markers_2),
+           Freq = as.factor(Freq))
+  
+  dat_ %>%
+    ggplot(aes(x=Var1, y=Var2, fill = Freq))+
+    geom_tile()+
+    scale_fill_manual(values = green_palette)+
+    facet_grid(markers2~markers1)+
+    coord_fixed()+
+    theme_minimal()
+}
+
+visualise_transition2 = function(landscape, treatment){
+  # Evaluate 3 landscapes : 
+  landscape_init = as.vector(landscape)
+  landscape_post_treat = unname(landscape*(1 - treatment[1: index1]))
+  landscape_init1 = as.vector(age_dyn(landscape_post_treat))
+  landscape_post_treat1 = as.vector(landscape_init1*(1 - treatment[index2:index3]))
+  landscape_init2 = as.vector(age_dyn(landscape_post_treat1))
+  landscape_post_treat2 = as.vector(landscape_init2*(1 - treatment[index4:index5]))
+  landscape_init3 = as.vector(age_dyn(landscape_post_treat2))
+  landscape_post_treat3 = as.vector(landscape_init3*(1 - treatment[index6:index7]))
+  
+  markers_1 = c(rep('initial', size^2),
+               rep('post_treat0', size^2),
+               rep('initial1', size^2),
+               rep('post_treat1', size^2),
+               rep('initial2', size^2),
+               rep('post_treat2', size^2), 
+               rep('initial3', size^2),
+               rep('post_treat3', size^2))
+  
+  markers_2 = c(rep(0,2*size^2),
+                rep(1,2*size^2),
+                rep(2,2*size^2),
+                rep(3,2*size^2))
+  
+  dat_ =  as.data.frame(as.table(matrix(landscape_init,size,size)))%>%
+      mutate(Var1 = as.numeric(Var1),
+             Var2 = as.numeric(Var2))
+
+  for(x in c('landscape_post_treat', 'landscape_init1', 'landscape_post_treat1', 
+             'landscape_init2', 'landscape_post_treat2', "landscape_init3", 'landscape_post_treat3')){
+    
+    candit = eval(parse(text = x))
+    dat__ = as.data.frame(as.table(matrix(candit, size, size)))%>%
+      mutate(Var1 = as.numeric(Var1),
+             Var2 = as.numeric(Var2))
+    dat_ = rbind(dat_, dat__)
+  }
+  
+  dat_ = dat_%>%
+    mutate(markers1 = factor(markers_1,
+                            levels = c('initial', 'post_treat0', 'initial1',
+                                       'post_treat1', 'initial2', 'post_treat2', 'initial3', 'post_treat3')),
+           markers2 = factor(markers_2),
+           Freq = as.factor(Freq))
+  
+  dat_ %>%
+    ggplot(aes(x=Var1, y=Var2, fill = Freq))+
+    geom_tile()+
+    scale_fill_manual(values = green_palette)+
+    facet_grid(markers2~markers1)+
+    coord_fixed()+
+    theme_minimal()
+}
+
+visualise_transition3 = function(landscape, treatment){
+  # Evaluate 3 landscapes : 
+  landscape_init = as.vector(landscape)
+  landscape_post_treat = unname(landscape*(1 - treatment[1: index1]))
+  landscape_init1 = as.vector(age_dyn(landscape_post_treat))
+  landscape_post_treat1 = as.vector(landscape_init1*(1 - treatment[index2:index3]))
+  landscape_init2 = as.vector(age_dyn(landscape_post_treat1))
+  landscape_post_treat2 = as.vector(landscape_init2*(1 - treatment[index4:index5]))
+  landscape_init3 = as.vector(age_dyn(landscape_post_treat2))
+  landscape_post_treat3 = as.vector(landscape_init3*(1 - treatment[index6:index7]))
+  landscape_init4 = as.vector(age_dyn(landscape_post_treat3))
+  landscape_post_treat4 = as.vector(landscape_init4*(1 - treatment[index8:index9]))
+  
+  markers_1 = c(rep('initial', size^2),
+               rep('post_treat0', size^2),
+               rep('initial1', size^2),
+               rep('post_treat1', size^2),
+               rep('initial2', size^2),
+               rep('post_treat2', size^2), 
+               rep('initial3', size^2),
+               rep('post_treat3', size^2),
+               rep('initial4', size^2),
+               rep('post_treat4', size^2))
+  
+  markers_2 = c(rep(0,2*size^2),
+                rep(1,2*size^2),
+                rep(2,2*size^2),
+                rep(3,2*size^2),
+                rep(4,2*size^2))
+  
+  dat_ =  as.data.frame(as.table(matrix(landscape_init,size,size)))%>%
+      mutate(Var1 = as.numeric(Var1),
+             Var2 = as.numeric(Var2))
+
+  for(x in c('landscape_post_treat', 'landscape_init1', 'landscape_post_treat1', 
+             'landscape_init2', 'landscape_post_treat2', "landscape_init3", 'landscape_post_treat3',
+             "landscape_init4", 'landscape_post_treat4')){
+    
+    candit = eval(parse(text = x))
+    dat__ = as.data.frame(as.table(matrix(candit, size, size)))%>%
+      mutate(Var1 = as.numeric(Var1),
+             Var2 = as.numeric(Var2))
+    dat_ = rbind(dat_, dat__)
+  }
+  
+  dat_ = dat_%>%
+    mutate(markers1 = factor(markers_1,
+                            levels = c('initial', 'post_treat0', 'initial1',
+                                       'post_treat1', 'initial2', 'post_treat2', 'initial3', 'post_treat3', 'initial4', 'post_treat4')),
+           markers2 = factor(markers_2),
+           Freq = as.factor(Freq))
+  
+  dat_ %>%
+    ggplot(aes(x=Var1, y=Var2, fill = Freq))+
+    geom_tile()+
+    scale_fill_manual(values = green_palette)+
+    facet_grid(markers2~markers1)+
+    coord_fixed()+
+    theme_minimal()
+}
+
+# Functions for treatment allocation 
+
+degrees = function(landscape){
+  return(as.vector(t(Matrix(ifelse(landscape == 2, 1, 0),sparse = T)) %*% 
+                     adjacency_))
+  
+}
+  
+
+generate_binary_matrix <- function(N, length_of_vector, preferential_locations, X) {
+  # N: number of binary vectors to generate
+  # length_of_vector: the length of each binary vector
+  # preferential_locations: indices where the 1s are preferentially located
+  # X: maximum number of 1s in each vector
+
+  # Initialize a matrix to store the generated binary vectors
+  binary_matrix <- matrix(0, nrow = N, ncol = length_of_vector)
+  
+  for (i in 1:N) {
+    # Initialize a binary vector with all 0s
+    binary_vector <- rep(0, length_of_vector)
+    
+    # Randomly select the number of 1s to place, not exceeding X
+    num_ones = X
+    
+    # Ensure preferential locations are not greater than the number of available positions
+    num_preferential <- min(num_ones, length(preferential_locations))
+    
+    # Randomly select indices from preferential locations for the 1s
+    if (num_preferential > 0) {
+      selected_indices <- sample(preferential_locations, num_preferential)
+    } else {
+      selected_indices <- integer(0)
+    }
+    
+    # Place 1s in the selected preferential locations
+    binary_vector[selected_indices] <- 1
+    
+    # If needed, fill the remaining 1s in non-preferential locations
+    remaining_ones <- num_ones - num_preferential
+    if (remaining_ones > 0) {
+      # Define non-preferential locations
+      non_preferential_locations <- setdiff(1:length_of_vector, preferential_locations)
+      
+      # Randomly select remaining positions for the 1s
+      remaining_indices <- sample(non_preferential_locations, remaining_ones)
+      
+      # Place the remaining 1s
+      binary_vector[remaining_indices] <- 1
+    }
+    
+    # Store the generated binary vector in the matrix
+    binary_matrix[i, ] <- binary_vector
+  }
+  
+  return(Matrix(binary_matrix, sparse = T))
+}
+
+max_biodiv = as.numeric(mature_score(Matrix(2,nrow = size^2)))
+
+```
+
+## II. Load data
+
+```{r, load dat}
+if(size == 4){
+  data_test = readMM(here('landscapes_4x4','data','landscapes', 'landscape4_11_6.mtx'))
+  nrow(data_test)
+  ncol(data_test)
+  
+  landscape = as.vector(data_test[34762,])
+
+}else{
+  #landscape = as.vector(round(runif(size^2, -0.45,2.45)))
+  tryer = nlm_fbm(size, size, 1)
+
+  classified_landscape <- util_classify(tryer,
+                                      n = 3,
+                                      level_names = c("Age 0 to 5", 
+                                                      "Age 5 to 10",
+                                                      "Age > 10"))
+
+  #show_landscape(classified_landscape, discrete = TRUE)
+
+
+  m  = matrix(classified_landscape@data@values, size, size) - 1
+  r  = raster(m, xmn = 0, xmx = size, ymn = 0, ymx = size)
+  landscape = r@data@values
+  }
+
+```
+
+```{r, view the landscape}
+viz_landscape(r)
+
+```
+
+## III. Initiate fitness function and meta parameters for 3 steps
+
+```{r, fitness}
+const_ = max_biodiv/5
+index1= size^2
+index2 = size^2+1
+index3 = 2*size^2
+index4 = 2*size^2+1
+index5 = 3*size^2
+
+jvlivs = function(treatments_, 
+                  landscape_ = landscape,
+                  B_ = budget,
+                  constant_ = const_){
+  # First try is landscape is 3*N^2
+  # Generate indexes:
+
+  
+  # Generate treatments
+  treatment1 = treatments_[1:index1]
+  treatment2 = treatments_[index2:index3]
+  treatment3 = treatments_[index4:index5]
+
+  #Landscape and scores : 
+  
+    # Period 1 : 
+  landscape_treated1 = landscape*(1 - treatment1)
+  score_fuel1 = mature_score(landscape_treated1, "F")
+  score_biod1 = mature_score(landscape_treated1)
+  
+  # Period 2:
+  suppressWarnings({
+      landscape_treated2 = age_dyn(landscape_treated1)*(1 - treatment2)
+  })
+  score_fuel2 = mature_score(landscape_treated2, "F")
+  score_biod2 = mature_score(landscape_treated2)
+
+  # Period 3:
+  suppressWarnings({
+      landscape_treated3 = age_dyn(landscape_treated2)*(1 - treatment3)
+  })
+  score_fuel3 = mature_score(landscape_treated3, "F")
+  score_biod3 = mature_score(landscape_treated3)
+  
+  
+  # Constraints : 
+    # Period1
+  constraint_budget1 = B_ - sum(treatment1)
+  constraint_biod1   = constant_ - score_biod1
+  
+  penalty1_1 = ifelse(constraint_budget1 >=0, 0, 10^4*abs(constraint_budget1))
+  penalty2_1 = ifelse(constraint_biod1 <= 0, 0, 10^4*abs(constraint_biod1))
+    # Period2
+  constraint_budget2 = B_ - sum(treatment2)
+  constraint_biod2   = constant_ - score_biod2
+  
+  penalty1_2 = ifelse(constraint_budget2 >=0, 0, 10^4*abs(constraint_budget2))
+  penalty2_2 = ifelse(constraint_biod2 <= 0, 0, 10^4*abs(constraint_biod2))
+    # Period3
+  constraint_budget3 = B_ - sum(treatment3)
+  constraint_biod3   = constant_ - score_biod3
+  
+  penalty1_3 = ifelse(constraint_budget3 >=0, 0, 10^4*abs(constraint_budget3))
+  penalty2_3 = ifelse(constraint_biod3 <= 0, 0, 10^4*abs(constraint_biod3))
+  
+  value_ = -(score_fuel1 + score_fuel2 + score_fuel3 +
+    penalty1_1 + penalty1_2 + penalty1_3 +
+    penalty2_1 + penalty2_2 + penalty2_3)
+  
+  return(as.numeric(value_))
+} 
+```
+
+## A. Run analysis
+
+```{r, analysis}
+popSize_ = 2*size
+
+maxIter_ = 600
+
+
+const_ = round(max_biodiv/5)
+
+
+#if(const_ <= dat_og$biod_og){
+#  if(const_ <= .3*max_biodiv){
+#    suggestions_ = generate_binary_matrix(popSize_, 
+#                                      size^2,
+#                                      which(degrees== max(degrees)),
+#                                      budget)
+#  }else{
+#    suggestions_ = generate_binary_vectors(popSize_, 
+#                                          size^2,
+#                                          which(degrees != max(degrees)), budget)
+    # random_:
+suggestions_ = Matrix(rbinom(popSize_ * 3*size^2, 1, budget/size^2*0.9), nrow = popSize_, ncol = 3*size^2, sparse = T)
+#  }
+  
+#if(size %in%c(3,4)){
+#  maxIter_ = 25
+#}else{
+#  maxIter_ = 100
+#}
+
+
+timer__ = Sys.time()
+
+
+ga_result = ga(
+    type = "binary",
+    fitness = jvlivs,
+    nBits = 3*size^2,       # Number of bits in the binary vector (size of the landscape)
+    maxiter = maxIter_,   # Number of generations
+    popSize = popSize_,    # Population size
+    pcrossover = 0.8,# Crossover probability
+    pmutation = 0.1, # Mutation probability
+    suggestions = suggestions_,
+    monitor = T
+  )
+
+print(Sys.time() - timer__)
+```
+
+Then, assess performance of the algorithm:
+```{r, performance}
+### Illustration to see if it works
+summary(ga_result)
+```
+So far : 1000 iterations yield 1590 over time, for 20 minutes roughly. 
+
+Test : 2000 iterations yields 1437
+
+Performance metrics : 
+
+```{r, metrics}
+
+budg_eff = vector('list', nrow(ga_result@solution))
+
+for(i in 1:nrow(ga_result@solution)){
+  budg_eff[i] = sum(ga_result@solution[i,])
+}
+budg_eff = unlist(budg_eff)
+treatment_id = which(budg_eff == min(budg_eff))
+if(length(treatment_id)>1){
+ treatment_id = treatment_id[1]
+}
+treatment_ = ga_result@solution[treatment_id,]
+
+
+# Budgets
+budg_effective0 = sum(treatment_[1:index1])
+budg_effective1 = sum(treatment_[index2:index3])
+budg_effective2 = sum(treatment_[index4:index5])
+
+# Successions
+post_treat0 = as.numeric(landscape * (1 - treatment_[1:index1]))
+post_treat1 = as.numeric(age_dyn(post_treat0) * (1- treatment_[index2:index3]))
+post_treat2 = as.numeric(age_dyn(post_treat1) * (1- treatment_[index4:index5]))
+
+# Scores 
+fuel_score0 = mature_score(post_treat0,"F")
+fuel_score1 = mature_score(post_treat1,"F")
+fuel_score2 = mature_score(post_treat2,"F")
+
+biod_score0 = mature_score(post_treat0,"B")
+biod_score1 = mature_score(post_treat1,"B")
+biod_score2 = mature_score(post_treat2,"B")
+
+dat_ = data.frame(budget = budget, 
+                  expenses0 = budg_effective0, 
+                  expenses1 = budg_effective1, 
+                  expenses2 = budg_effective2, 
+                  #
+                  risk0 = fuel_score0,
+                  risk1 = fuel_score1,
+                  risk2 = fuel_score2,
+                  #
+                  constraint = const_, 
+                  biodiv0 = biod_score0,
+                  biodiv1 = biod_score1,
+                  biodiv2 = biod_score2)
+head(dat_)
+
+```
+
+Visualize transition : 
+
+```{r, viz }
+visualise_transition(landscape,treatment_)
+```
+
+
+## IV. Initiate 4 fold function and see how it works
+
+```{r, 4peat}
+index6 = 3*size^2+1
+index7 = 4*size^2
+
+autobahn = function(treatments_, 
+                  landscape_ = landscape,
+                  B_ = budget,
+                  constant_ = const_){
+  # First try is landscape is 3*N^2
+  # Generate indexes:
+
+  
+  # Generate treatments
+  treatment0 = treatments_[1:index1]
+  treatment1 = treatments_[index2:index3]
+  treatment2 = treatments_[index4:index5]
+  treatment3 = treatments_[index6:index7]
+
+  #Landscape and scores : 
+  
+    # Period 0 : 
+  landscape_treated0 = landscape*(1 - treatment0)
+  score_fuel0 = mature_score(landscape_treated0, "F")
+  score_biod0 = mature_score(landscape_treated0)
+  
+  # Period 1:
+  suppressWarnings({
+      landscape_treated1 = age_dyn(landscape_treated0)*(1 - treatment1)
+  })
+  score_fuel1 = mature_score(landscape_treated1, "F")
+  score_biod1 = mature_score(landscape_treated1)
+
+  # Period 2:
+  suppressWarnings({
+      landscape_treated2 = age_dyn(landscape_treated1)*(1 - treatment2)
+  })
+  score_fuel2 = mature_score(landscape_treated2, "F")
+  score_biod2 = mature_score(landscape_treated2)
+  
+  # Period 3:
+  suppressWarnings({
+      landscape_treated3 = age_dyn(landscape_treated2)*(1 - treatment3)
+  })
+  score_fuel3 = mature_score(landscape_treated3, "F")
+  score_biod3 = mature_score(landscape_treated3)
+  
+  # Constraints : 
+    # Period0
+  constraint_budget0 = B_ - sum(treatment0)
+  constraint_biod0   = constant_ - score_biod0
+  
+  penalty1_0 = ifelse(constraint_budget0 >=0, 0, 10^4*abs(constraint_budget0))
+  penalty2_0 = ifelse(constraint_biod0 <= 0, 0, 10^4*abs(constraint_biod0))
+    # Period1
+  constraint_budget1 = B_ - sum(treatment1)
+  constraint_biod1   = constant_ - score_biod1
+  
+  penalty1_1 = ifelse(constraint_budget1 >=0, 0, 10^4*abs(constraint_budget1))
+  penalty2_1 = ifelse(constraint_biod1 <= 0, 0, 10^4*abs(constraint_biod1))
+    # Period2
+  constraint_budget2 = B_ - sum(treatment2)
+  constraint_biod2   = constant_ - score_biod2
+  
+  penalty1_2 = ifelse(constraint_budget2 >=0, 0, 10^4*abs(constraint_budget2))
+  penalty2_2 = ifelse(constraint_biod2 <= 0, 0, 10^4*abs(constraint_biod2))
+    # Period3
+  constraint_budget3 = B_ - sum(treatment3)
+  constraint_biod3   = constant_ - score_biod3
+  
+  penalty1_3 = ifelse(constraint_budget3 >=0, 0, 10^4*abs(constraint_budget3))
+  penalty2_3 = ifelse(constraint_biod3 <= 0, 0, 10^4*abs(constraint_biod3))
+  
+  value_ = -(score_fuel0 + score_fuel1 + score_fuel2 + score_fuel3+
+    penalty1_0 + penalty1_1 + penalty1_2 + penalty1_3 +
+    penalty2_0 + penalty2_1 + penalty2_2 + penalty2_3)
+
+  return(as.numeric(value_))
+} 
+
+```
+
+Go if 4
+
+
+```{r, analysis}
+
+
+popSize_ = 100
+maxIter_ = 150
+
+
+const_ = round(max_biodiv/5)
+
+
+#if(const_ <= dat_og$biod_og){
+#  if(const_ <= .3*max_biodiv){
+#    suggestions_ = generate_binary_matrix(popSize_, 
+#                                      size^2,
+#                                      which(degrees== max(degrees)),
+#                                      budget)
+#  }else{
+#    suggestions_ = generate_binary_vectors(popSize_, 
+#                                          size^2,
+#                                          which(degrees != max(degrees)), budget)
+    # random_:
+suggestions_ = matrix(rbinom(popSize_ * 4*size^2, 1, budget/size^2*0.9), nrow = popSize_, ncol = 4*size^2)
+#  }
+  
+#if(size %in%c(3,4)){
+#  maxIter_ = 25
+#}else{
+#  maxIter_ = 100
+#}
+
+
+timer__ = Sys.time()
+
+max_values = vector('list', maxIter_)
+
+ga_result = ga(
+    type = "binary",
+    fitness = autobahn,
+    nBits = 4*size^2,       # Number of bits in the binary vector (size of the landscape)
+    maxiter = maxIter_,   # Number of generations
+    popSize = popSize_,    # Population size
+    pcrossover = 0.8,# Crossover probability
+    pmutation = 0.2, # Mutation probability
+    suggestions = suggestions_,
+    monitor = T
+  )
+
+print(Sys.time() - timer__)
+```
+
+Performance metrics : 
+
+```{r, metrics}
+
+potential_solutions = vector('list', nrow(ga_result@solution))
+
+for(i in 1:nrow(ga_result@solution)){
+  potential_solutions[i] = sum(ga_result@solution[i,])
+}
+potential_solutions = unlist(potential_solutions)
+treatment_id = which(potential_solutions == min(potential_solutions))
+
+
+if(length(treatment_id)>1){
+ treatment_id = treatment_id[1]
+}
+
+treatment_ = ga_result@solution[treatment_id,]
+
+
+# Budgets
+budg_effective0 = sum(treatment_[1:index1])
+budg_effective1 = sum(treatment_[index2:index3])
+budg_effective2 = sum(treatment_[index4:index5])
+budg_effective3 = sum(treatment_[index6:index7])
+
+# Successions
+post_treat0 = as.numeric(landscape * (1 - treatment_[1:index1]))
+post_treat1 = as.numeric(age_dyn(post_treat0) * (1- treatment_[index2:index3]))
+post_treat2 = as.numeric(age_dyn(post_treat1) * (1- treatment_[index4:index5]))
+post_treat3 = as.numeric(age_dyn(post_treat2) * (1- treatment_[index6:index7]))
+
+# Scores 
+fuel_score0 = mature_score(post_treat0,"F")
+fuel_score1 = mature_score(post_treat1,"F")
+fuel_score2 = mature_score(post_treat2,"F")
+fuel_score3 = mature_score(post_treat3,"F")
+
+
+biod_score0 = mature_score(post_treat0,"B")
+biod_score1 = mature_score(post_treat1,"B")
+biod_score2 = mature_score(post_treat2,"B")
+biod_score3 = mature_score(post_treat3,"B")
+
+dat_ = data.frame(budget = budget, 
+                  expenses0 = budg_effective0, 
+                  expenses1 = budg_effective1, 
+                  expenses2 = budg_effective2, 
+                  expenses3 = budg_effective3, 
+                  #
+                  risk0 = fuel_score0,
+                  risk1 = fuel_score1,
+                  risk2 = fuel_score2,
+                  risk3 = fuel_score3,
+                  overall_risk = fuel_score0+fuel_score1+fuel_score2+fuel_score3,
+                  #
+                  constraint = const_, 
+                  biodiv0 = biod_score0,
+                  biodiv1 = biod_score1,
+                  biodiv2 = biod_score2,
+                  biodiv3 = biod_score3)
+head(dat_)
+```
+
+Visualize transition : 
+
+```{r, viz }
+visualise_transition2(landscape,treatment_)
+
+```
+
+## IV. Initiate 5 fold function and see how it works
+
+```{r, 4peat}
+index8= 4*size^2+1
+index9 = 5*size^2
+
+A7 = function(treatments_, 
+              landscape_ = landscape,
+              B_ = budget,
+              constant_ = const_){
+  # First try is landscape is 3*N^2
+  # Generate indexes:
+
+  
+  # Generate treatments
+  treatment0 = treatments_[1:index1]
+  treatment1 = treatments_[index2:index3]
+  treatment2 = treatments_[index4:index5]
+  treatment3 = treatments_[index6:index7]
+  treatment4 = treatments_[index8:index9]
+
+  #Landscape and scores : 
+  
+    # Period 0 : 
+  landscape_treated0 = landscape*(1 - treatment0)
+  score_fuel0 = mature_score(landscape_treated0, "F")
+  score_biod0 = mature_score(landscape_treated0)
+  
+  # Period 1:
+  suppressWarnings({
+      landscape_treated1 = age_dyn(landscape_treated0)*(1 - treatment1)
+  })
+  score_fuel1 = mature_score(landscape_treated1, "F")
+  score_biod1 = mature_score(landscape_treated1)
+
+  # Period 2:
+  suppressWarnings({
+      landscape_treated2 = age_dyn(landscape_treated1)*(1 - treatment2)
+  })
+  score_fuel2 = mature_score(landscape_treated2, "F")
+  score_biod2 = mature_score(landscape_treated2)
+  
+  # Period 3:
+  suppressWarnings({
+      landscape_treated3 = age_dyn(landscape_treated2)*(1 - treatment3)
+  })
+  score_fuel3 = mature_score(landscape_treated3, "F")
+  score_biod3 = mature_score(landscape_treated3)
+  # Period 4:
+  suppressWarnings({
+      landscape_treated4 = age_dyn(landscape_treated3)*(1 - treatment4)
+  })
+  score_fuel4 = mature_score(landscape_treated4, "F")
+  score_biod4 = mature_score(landscape_treated4)
+  
+  # Constraints : 
+    # Period0
+  constraint_budget0 = B_ - sum(treatment0)
+  constraint_biod0   = constant_ - score_biod0
+  
+  penalty1_0 = ifelse(constraint_budget0 >=0, 0, 10^4*abs(constraint_budget0))
+  penalty2_0 = ifelse(constraint_biod0 <= 0, 0, 10^4*abs(constraint_biod0))
+    # Period1
+  constraint_budget1 = B_ - sum(treatment1)
+  constraint_biod1   = constant_ - score_biod1
+  
+  penalty1_1 = ifelse(constraint_budget1 >=0, 0, 10^4*abs(constraint_budget1))
+  penalty2_1 = ifelse(constraint_biod1 <= 0, 0, 10^4*abs(constraint_biod1))
+    # Period2
+  constraint_budget2 = B_ - sum(treatment2)
+  constraint_biod2   = constant_ - score_biod2
+  
+  penalty1_2 = ifelse(constraint_budget2 >=0, 0, 10^4*abs(constraint_budget2))
+  penalty2_2 = ifelse(constraint_biod2 <= 0, 0, 10^4*abs(constraint_biod2))
+    # Period3
+  constraint_budget3 = B_ - sum(treatment3)
+  constraint_biod3   = constant_ - score_biod3
+  
+  penalty1_3 = ifelse(constraint_budget3 >=0, 0, 10^4*abs(constraint_budget3))
+  penalty2_3 = ifelse(constraint_biod3 <= 0, 0, 10^4*abs(constraint_biod3))
+    # Period4
+  constraint_budget4 = B_ - sum(treatment4)
+  constraint_biod4   = constant_ - score_biod4
+  
+  penalty1_4 = ifelse(constraint_budget4 >=0, 0, 10^4*abs(constraint_budget4))
+  penalty2_4 = ifelse(constraint_biod4 <= 0, 0, 10^4*abs(constraint_biod4))
+  
+  value_ = -(score_fuel0 + score_fuel1 + score_fuel2 + score_fuel3 + score_fuel4+
+    penalty1_0 + penalty1_1 + penalty1_2 + penalty1_3 +penalty1_4+
+    penalty2_0 + penalty2_1 + penalty2_2 + penalty2_3 +penalty2_4)
+
+  return(as.numeric(value_))
+} 
+
+```
+
+Go if 5
+
+
+```{r, analysis}
+
+
+popSize_ = 100
+maxIter_ = 200
+
+
+const_ = round(max_biodiv/5)
+
+
+#if(const_ <= dat_og$biod_og){
+#  if(const_ <= .3*max_biodiv){
+#    suggestions_ = generate_binary_matrix(popSize_, 
+#                                      size^2,
+#                                      which(degrees== max(degrees)),
+#                                      budget)
+#  }else{
+#    suggestions_ = generate_binary_vectors(popSize_, 
+#                                          size^2,
+#                                          which(degrees != max(degrees)), budget)
+    # random_:
+suggestions_ = matrix(rbinom(popSize_ * 5*size^2, 1, budget/size^2*0.9), nrow = popSize_, ncol = 5*size^2)
+#  }
+  
+#if(size %in%c(3,4)){
+#  maxIter_ = 25
+#}else{
+#  maxIter_ = 100
+#}
+
+
+timer__ = Sys.time()
+
+max_values = vector('list', maxIter_)
+
+ga_result = ga(
+    type = "binary",
+    fitness = A7,
+    nBits = 5*size^2,       # Number of bits in the binary vector (size of the landscape)
+    maxiter = maxIter_,   # Number of generations
+    popSize = popSize_,    # Population size
+    pcrossover = 0.8,# Crossover probability
+    pmutation = 0.2, # Mutation probability
+    suggestions = suggestions_,
+    monitor = T
+  )
+
+print(Sys.time() - timer__)
+```
+
+Performance metrics : 
+
+```{r, metrics}
+
+potential_solutions = vector('list', nrow(ga_result@solution))
+
+for(i in 1:nrow(ga_result@solution)){
+  potential_solutions[i] = sum(ga_result@solution[i,])
+}
+potential_solutions = unlist(potential_solutions)
+treatment_id = which(potential_solutions == min(potential_solutions))
+
+
+if(length(treatment_id)>1){
+ treatment_id = treatment_id[1]
+}
+
+treatment_ = ga_result@solution[treatment_id,]
+
+
+# Budgets
+budg_effective0 = sum(treatment_[1:index1])
+budg_effective1 = sum(treatment_[index2:index3])
+budg_effective2 = sum(treatment_[index4:index5])
+budg_effective3 = sum(treatment_[index6:index7])
+budg_effective4 = sum(treatment_[index8:index9])
+
+# Successions
+post_treat0 = as.numeric(landscape * (1 - treatment_[1:index1]))
+post_treat1 = as.numeric(age_dyn(post_treat0) * (1- treatment_[index2:index3]))
+post_treat2 = as.numeric(age_dyn(post_treat1) * (1- treatment_[index4:index5]))
+post_treat3 = as.numeric(age_dyn(post_treat2) * (1- treatment_[index6:index7]))
+post_treat4 = as.numeric(age_dyn(post_treat3) * (1- treatment_[index8:index9]))
+
+# Scores 
+fuel_score0 = mature_score(post_treat0,"F")
+fuel_score1 = mature_score(post_treat1,"F")
+fuel_score2 = mature_score(post_treat2,"F")
+fuel_score3 = mature_score(post_treat3,"F")
+fuel_score4 = mature_score(post_treat4,"F")
+
+biod_score0 = mature_score(post_treat0,"B")
+biod_score1 = mature_score(post_treat1,"B")
+biod_score2 = mature_score(post_treat2,"B")
+biod_score3 = mature_score(post_treat3,"B")
+biod_score4 = mature_score(post_treat4,"B")
+
+
+dat_ = data.frame(budget = budget, 
+                  expenses0 = budg_effective0, 
+                  expenses1 = budg_effective1, 
+                  expenses2 = budg_effective2, 
+                  expenses3 = budg_effective3, 
+                  expenses4 = budg_effective4, 
+                  
+                  #
+                  risk0 = fuel_score0,
+                  risk1 = fuel_score1,
+                  risk2 = fuel_score2,
+                  risk3 = fuel_score3,
+                  risk4 = fuel_score4,
+                  overall_risk = fuel_score0+fuel_score1+fuel_score2+fuel_score3+fuel_score4,
+                  #
+                  constraint = const_, 
+                  biodiv0 = biod_score0,
+                  biodiv1 = biod_score1,
+                  biodiv2 = biod_score2,
+                  biodiv3 = biod_score3,
+                  biodiv4 = biod_score4)
+head(dat_)
+```
+
+Visualize transition : 
+
+```{r, viz }
+visualise_transition3(landscape,treatment_)
+
+```

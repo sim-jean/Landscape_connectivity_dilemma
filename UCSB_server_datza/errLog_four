@@ -1,0 +1,32 @@
+Loading required package: RcppArmadillo
+Loading required package: crayon
+Loading required package: GA
+Loading required package: foreach
+Loading required package: iterators
+Package 'GA' version 3.2.4
+Type 'citation("GA")' for citing this R package in publications.
+
+Attaching package: ‘GA’
+
+The following object is masked from ‘package:utils’:
+
+    de
+
+Loading required package: magrittr
+Loading required package: dplyr
+
+Attaching package: ‘dplyr’
+
+The following objects are masked from ‘package:stats’:
+
+    filter, lag
+
+The following objects are masked from ‘package:base’:
+
+    intersect, setdiff, setequal, union
+
+Loading required package: reshape2
+Loading required package: Matrix
+Loading required package: digest
+Loading required package: parallel
+Loading required package: stringr

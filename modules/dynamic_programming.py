@@ -1,5 +1,5 @@
 '''
-Features the functions used to realize the dynamic programmin part of Mouysset & Jean, 2023.
+Features the functions used to realize the dynamic programming part of Mouysset & Jean, 2023.
 
 Contains :
 - data import functions for 3x3 landscapes and 4x4 landscapes : data_list2, data_list

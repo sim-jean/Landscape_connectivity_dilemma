@@ -1,0 +1,214 @@
+---
+title: "Final extension"
+author: "Simon Jean"
+date: "2024-04-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+rm(list = ls())
+library(magrittr)
+library(dplyr)
+library(reshape2)
+library(ggplot2)
+library(landscapeR)
+library(raster)
+library(NLMR)
+library(Matrix)
+```
+
+## Analysis of real looking landscapes in light of our results
+Set landscape size : 
+
+```{r, parameter and functions}
+size = 100
+
+viz_landscape = function(landscape){
+ melt(landscape)%>%
+    mutate(value = as.factor(value))%>%
+    ggplot(aes(x= Var1, y = Var2, fill = value))+
+    geom_tile()+
+    scale_fill_manual(values= c('white', 'orange', 'red'))+
+    theme_minimal()
+}
+
+next_landscape = function(landscape, treatment){
+  vector_version = c(landscape)
+  next_landscape = pmin((1+vector_version), rep(2,length(vector_version)))
+  next_landscape = next_landscape * (1 - c(treatment))
+  return(next_landscape)
+}
+
+```
+
+Now originate landscape : 
+
+```{r, }
+landscapes = list()
+nlandscape = 15
+for(x in 1:nlandscape){
+    m  = matrix(0, size, size)
+    r  = raster(m, xmn = 0, xmx = size, ymn = 0, ymx = size)
+    num1 = round(runif(1, 0, size))
+    size1 = round(runif(num1, 1, .8*size))
+    rr = makeClass(r, num1, size1, val= 1)
+
+    num2 = round(runif(1, 0, size))
+    size2 = round(runif(num2, 1, .8*size))
+    rr = makeClass(rr, num2, size2, val = 2)
+    plot(rr)
+    landscapes = append(landscapes, list(rr@data@values))
+}
+
+
+```
+
+Now this teaches several things : 
+
+1. First, better to work with raster format
+
+2. It may make sense to store the rasters in a nested list to have the intertemporal profile of management compared to initial conditions
+
+3. It is still unclear how we test our hypothesis and generate the treatment though
+
+## Work with 1 landscape
+
+```{r, own}
+#fictitious_landscape = matrix(round(runif(size^2,0,2 )), nrow = size, ncol = size)
+
+#viz_landscape(landscapes[1])
+
+#viz_landscape1 = matrix(landscapes[1], size, size)
+#viz_landscape(viz_landscape1)
+
+#treatment = matrix(round(runif(size^2, 0, 1)), nrow = size, ncol = size)
+
+#viz_landscape(matrix(next_landscape(fictitious_landscape, treatment),100,100))
+
+size = 80
+
+m  = matrix(0, size, size)
+r  = raster(m, xmn = 0, xmx = size, ymn = 0, ymx = size)
+
+num1 = round(runif(1, 0, size))
+size1 = round(runif(num1, 1, .8*size))
+rr = makeClass(r, num1, size1, val= 1)
+
+num2 = round(runif(1, 0, size))
+if(num2 == 0){
+  size2 == 0
+}else{
+  size2 = round(runif(num2, 1, .8*size))
+}
+rr = makeClass(rr, num2, size2, val = 2)
+plot(rr)
+
+```
+
+Now several questions emerge : 
+
+1. How do we evaluate the landscape with respect to our metrics : need a huge adjacency matrix.
+
+```{r, adjacency matrix}
+kings_graph <- function(n, timer_ = T) {
+  if(timer_ == T){
+    start = Sys.time()
+  }
+  # Initialize the adjacency matrix with zeros
+  adj_matrix <- Matrix(0, nrow = n*n, ncol = n*n)
+  # Define potential moves (king moves in chess)
+  moves <- rbind(c(-1, -1), c(-1, 0), c(-1, 1), c(0, -1), c(0, 1), c(1, -1), c(1, 0), c(1, 1), c(0,0))
+
+  # Helper function to safely add edges
+  add_edge <- function(i, j) {
+    if (i >= 1 && i <= n*n && j >= 1 && j <= n*n) {
+      adj_matrix[i,j] <- 1
+      adj_matrix[j,i] <- 1
+    }
+    return(adj_matrix)
+  }
+  
+  # Map each square to its neighbors
+  for (row in 1:n) {
+    for (col in 1:n) {
+      index <- (row - 1) * n + col
+      
+      for (move in 1:nrow(moves)) {
+        neighbor_row <- row + moves[move, 1]
+        neighbor_col <- col + moves[move, 2]
+        if (neighbor_row > 0 && neighbor_row <= n && neighbor_col > 0 && neighbor_col <= n) {
+          neighbor_index <- (neighbor_row - 1) * n + neighbor_col
+          if(adj_matrix[index,neighbor_index] == 0){
+            adj_matrix = add_edge(index, neighbor_index) 
+          }
+        }
+      }
+    }
+  }
+  if(timer_ == T){
+    end <- Sys.time()
+    time_taken <- end - start
+    return(list(matrix = adj_matrix, time = time_taken))
+  } else {
+    return(adj_matrix)
+  }
+}
+
+test__ = F
+if(test__ == T){
+  adjacency_ = matrix(nrow = 9, ncol = 9)
+adjacency_[1, ] = c(1, 1, 0, 1, 1, 0, 0, 0, 0)
+adjacency_[2, ] = c(1, 1, 1, 1, 1, 1, 0, 0, 0)
+adjacency_[3, ] = c(0, 1, 1, 0, 1, 1, 0, 0, 0)
+adjacency_[4, ] = c(1, 1, 0, 1, 1, 0, 1, 1, 0)
+adjacency_[5, ] = c(1, 1, 1, 1, 1, 1, 1, 1, 1)
+adjacency_[6, ] = c(0, 1, 1, 0, 1, 1, 0, 1, 1)
+adjacency_[7, ] = c(0, 0, 0, 1, 1, 0, 1, 1, 0)
+adjacency_[8, ] = c(0, 0, 0, 1, 1, 1, 1, 1, 1)
+adjacency_[9, ] = c(0, 0, 0, 0, 1, 1, 0, 1, 1)
+
+adjacency_ == kings_graph(3)$matrix
+}
+
+
+# package sparse, Matrix, Big Memory
+adjacency_ = kings_graph(size)$matrix
+#teswrite.csv(test, 'king_adjacency_50.csv')
+```
+
+May be able to generate neutral landscape models with `NLMPy`, in Python, or check `NLMR`and `landscapetools` in R, although they disappeared from CRAN.
+
+```{r, compute the scores}
+mature_cells = function(matrix){
+  to_ret = Matrix(as.numeric(matrix<2), ncol = 1, sparse = T)
+  return(to_ret)
+}
+
+burn_cells = function(matrix){
+  to_ret = Matrix(as.numeric(matrix>1), ncol = 1, sparse = T)
+  return(to_ret)
+}
+
+mature_score = function(matrix, 
+                        type_ = 'B',
+                        adj_ = adjacency_){
+  if(type_ == 'B'){
+    return(t(mature_cells(matrix)) %*% adj_ %*% mature_cells(matrix))
+  }else{
+    return(t(burn_cells(matrix)) %*% adj_ %*% burn_cells(matrix))
+  }
+}
+
+
+mature_score(rr@data@values, type_ = "F")
+mature_score(rr@data@values, type_ = 'B')
+
+
+plot(rr)
+
+```
+
+
+
